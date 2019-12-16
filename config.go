@@ -26,13 +26,13 @@ type (
 	}
 
 	Config struct {
-		IMAP IMAPConfig `json:"imap"`
+		IMAP IMAPConfig       `json:"imap"`
 		SMTP ConnectionConfig `json:"smtp"`
 	}
 
 	PlainTextDialer func(string) (interface{}, error)
-	TLSDialer func(string, *tls.Config) (interface{}, error)
-	TLSStarter interface {
+	TLSDialer       func(string, *tls.Config) (interface{}, error)
+	TLSStarter      interface {
 		StartTLS(*tls.Config) error
 	}
 	Loginer interface {

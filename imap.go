@@ -169,5 +169,5 @@ func (r *MailReader) parseMessage(message *imap.Message) (*UnsubscribeInfo, erro
 		r.Infof("could not decode Subject header %q: %s", subject, err)
 	}
 
-	return &UnsubscribeInfo{to,subject,headers["List-Unsubscribe"],headers.Get("Message-ID")}, nil
+	return &UnsubscribeInfo{to, subject, headers["List-Unsubscribe"], headers.Get("Message-ID")}, nil
 }
