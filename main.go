@@ -3,11 +3,14 @@ package main
 import (
 	"flag"
 
+	"github.com/mattn/go-colorable"
 	"github.com/sirupsen/logrus"
 )
 
 func main() {
 	logrus.SetLevel(logrus.DebugLevel)
+	logrus.SetFormatter(&logrus.TextFormatter{ForceColors: true})
+	logrus.SetOutput(colorable.NewColorableStdout())
 
 	var configFile string
 	flag.StringVar(&configFile, "config", "./unsubscriber.json", "Path of configuration file")
