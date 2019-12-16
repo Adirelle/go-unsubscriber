@@ -2,15 +2,17 @@ package main
 
 import (
 	"flag"
+	"os"
 
-	"github.com/mattn/go-colorable"
-	"github.com/sirupsen/logrus"
+	"github.com/juju/loggo"
 )
 
 func main() {
-	logrus.SetLevel(logrus.DebugLevel)
-	logrus.SetFormatter(&logrus.TextFormatter{ForceColors: true})
-	logrus.SetOutput(colorable.NewColorableStdout())
+	_, _ = loggo.ReplaceDefaultWriter(loggo.NewSimpleWriter(os.Stdout, loggo.DefaultFormatter))
+	logger := loggo.GetLogger("")
+	logger.SetLogLevel(loggo.DEBUG)
+	logger.Infof("starting")
+	defer logger.Infof("bye bye")
 
 	var configFile string
 	flag.StringVar(&configFile, "config", "./unsubscriber.json", "Path of configuration file")
@@ -18,15 +20,27 @@ func main() {
 
 	config, err := LoadConfig(configFile)
 	if err != nil {
-		logrus.Fatalf("could not read configuration: %s", err)
+		logger.Criticalf("could not read configuration: %s", err)
+		os.Exit(2)
+	}
+	if err := loggo.ConfigureLoggers(config.Logs); err != nil {
+		logger.Warningf("could not configure logging: %s", err)
 	}
 
 	reader, err := NewMailReader(config.IMAP)
 	defer func() { _ = reader.Close() }()
 
-	for info := range reader.C {
-		logrus.WithField("message", info).Debug("got message")
-	}
+	unsubscriber := NewUniqueUnsubscriber(BySchemeUnsubscriber(map[string]Unsubscriber{
+		"http":   MakeLoggerUnsubscriber("http"),
+		"https":  MakeLoggerUnsubscriber("https"),
+		"mailto": MakeLoggerUnsubscriber("mailto"),
+	}))
 
-	logrus.Info("bye bye")
+	for info := range reader.C {
+		if err := unsubscriber.Unsubscribe(info); err != nil {
+			logger.Infof("could not process link: %q", err)
+		}
+	}
 }
+
+

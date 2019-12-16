@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/juju/loggo"
 	"os"
 	"strings"
 )
@@ -28,6 +29,7 @@ type (
 	Config struct {
 		IMAP IMAPConfig       `json:"imap"`
 		SMTP ConnectionConfig `json:"smtp"`
+		Logs string           `json:"logs"`
 	}
 
 	PlainTextDialer func(string) (interface{}, error)
@@ -129,6 +131,7 @@ func LoadConfig(path string) (Config, error) {
 	var conf Config
 
 	if reader, err := os.Open(path); err == nil {
+		loggo.GetLogger("config").Infof("reading configuration from %s", path)
 		err := json.NewDecoder(reader).Decode(&conf)
 		_ = reader.Close()
 		if err != nil {

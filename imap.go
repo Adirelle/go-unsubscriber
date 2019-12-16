@@ -6,9 +6,13 @@ import (
 	"fmt"
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
-	"github.com/sirupsen/logrus"
+	"github.com/juju/loggo"
 	"mime"
+	"net/mail"
 	"net/textproto"
+	"net/url"
+	"regexp"
+	"strings"
 )
 
 const (
@@ -17,35 +21,38 @@ const (
 
 type (
 	UnsubscribeInfo struct {
-		To        string
-		Subject   string
-		Links     []string
-		MessageId string
+		To      *mail.Address
+		Subject string
+		Link    *url.URL
 	}
 
 	MailReader struct {
 		C <-chan UnsubscribeInfo
 
-		client *client.Client
-		output chan UnsubscribeInfo
-		*logrus.Entry
+		client  *client.Client
+		output  chan UnsubscribeInfo
 		decoder mime.WordDecoder
+		loggo.Logger
 	}
 )
 
-var headerSectionName *imap.BodySectionName
+var (
+	fetchSectionName *imap.BodySectionName
+	linkRegex        *regexp.Regexp
+)
 
 func init() {
 	var err error
-	headerSectionName, err = imap.ParseBodySectionName("BODY.PEEK[HEADER]")
+	fetchSectionName, err = imap.ParseBodySectionName("BODY.PEEK[HEADER.FIELDS (To Subject List-Unsubscribe)]")
 	if err != nil {
 		panic(err.Error())
 	}
+	linkRegex = regexp.MustCompile("<((?:https?:|mailto:)[^>]+?)>")
 }
 
 func NewMailReader(config IMAPConfig) (r *MailReader, err error) {
 	r = new(MailReader)
-	r.Entry = logrus.WithField("imap", config.String())
+	r.Logger = loggo.GetLogger("imap")
 	r.output = make(chan UnsubscribeInfo, 5)
 	r.C = r.output
 
@@ -59,7 +66,7 @@ func NewMailReader(config IMAPConfig) (r *MailReader, err error) {
 
 func (r *MailReader) Close() error {
 	if r.client != nil {
-		r.Debug("closing connection")
+		r.Debugf("closing connection")
 		return r.client.Logout()
 	}
 	return nil
@@ -104,24 +111,25 @@ func (r *MailReader) start() error {
 func (r *MailReader) searchMessages() (*imap.SeqSet, error) {
 
 	criteria := imap.NewSearchCriteria()
+	criteria.SeqNum, _ = imap.ParseSeqSet("1:5")
 	criteria.Header.Set("List-Unsubscribe", "")
 	criteria.WithoutFlags = []string{imap.DeletedFlag}
 
 	r.Debugf("searching messages with these criteria: %s", criteria.Format())
-	uids, err := r.client.UidSearch(criteria)
+	uniqueIds, err := r.client.UidSearch(criteria)
 	if err != nil {
 		return nil, fmt.Errorf("could not search for messages: %w", err)
 	}
-	r.Infof("found %d messages", len(uids))
+	r.Infof("found %d messages", len(uniqueIds))
 
 	var seqSet imap.SeqSet
-	seqSet.AddNum(uids...)
+	seqSet.AddNum(uniqueIds...)
 
 	return &seqSet, nil
 }
 
 func (r *MailReader) fetchMails(uids *imap.SeqSet) {
-	r.Debug("fetching messages")
+	r.Debugf("fetching messages")
 	messages := make(chan *imap.Message, 10)
 
 	go func() {
@@ -131,43 +139,53 @@ func (r *MailReader) fetchMails(uids *imap.SeqSet) {
 		}
 	}()
 
-	err := r.client.UidFetch(uids, []imap.FetchItem{headerSectionName.FetchItem(), imap.FetchFlags}, messages)
+	err := r.client.UidFetch(uids, []imap.FetchItem{fetchSectionName.FetchItem(), imap.FetchFlags}, messages)
 	if err != nil {
-		r.Warnf("could not fetch (all) mail(s): %s", err)
+		r.Warningf("could not fetch (all) mail(s): %s", err)
 	}
 
-	r.Info("all messages processed")
+	r.Infof("all messages processed")
 }
 
 func (r *MailReader) processMessage(message *imap.Message) {
-	l := r.WithField("uid", message.Uid)
-	l.Debugf("received message")
+	r.Debugf("processing message #%d", message.Uid)
 
-	if info, err := r.parseMessage(message); err == nil {
-		r.output <- *info
-	} else {
-		l.Infof("ignoring message because of: %s", err)
+	reader := textproto.NewReader(bufio.NewReader(message.GetBody(fetchSectionName)))
+	headers, err := reader.ReadMIMEHeader()
+	if err != nil {
+		r.Infof("could not parse MIME headers: %w", err)
+		return
+	}
+
+	allValues := strings.Join(headers["List-Unsubscribe"], ",")
+	matches := linkRegex.FindAllStringSubmatch(allValues, -1)
+	if matches == nil {
+		r.Infof("no valid List-Unsubscribe links found")
+		return
+	}
+
+	to := r.decodeHeader(headers, "To")
+	subject := r.decodeHeader(headers, "Subject")
+
+	toAddr, err := mail.ParseAddress(to)
+	if err != nil {
+		r.Infof("could not parse To address %q: %s", to, err)
+	}
+
+	for _, groups := range matches {
+		if linkUrl, err := url.Parse(groups[1]); err == nil {
+			r.output <- UnsubscribeInfo{toAddr, subject, linkUrl}
+		} else {
+			r.Infof("could not parse link %q: %s", groups[1], err)
+		}
 	}
 }
 
-func (r *MailReader) parseMessage(message *imap.Message) (*UnsubscribeInfo, error) {
-	reader := textproto.NewReader(bufio.NewReader(message.GetBody(headerSectionName)))
-	headers, err := reader.ReadMIMEHeader()
+func (r *MailReader) decodeHeader(headers textproto.MIMEHeader, key string) string {
+	value, err := r.decoder.DecodeHeader(headers.Get(key))
 	if err != nil {
-		return nil, fmt.Errorf("could not parse MIME headers: %w", err)
+		value = headers.Get("Subject")
+		r.Infof("could not decode value of %q header %q: %s", key, value, err)
 	}
-
-	to, err := r.decoder.DecodeHeader(headers.Get("To"))
-	if err != nil {
-		to = headers.Get("To")
-		r.Infof("could not decode To header %q: %s", to, err)
-	}
-
-	subject, err := r.decoder.DecodeHeader(headers.Get("Subject"))
-	if err != nil {
-		subject = headers.Get("Subject")
-		r.Infof("could not decode Subject header %q: %s", subject, err)
-	}
-
-	return &UnsubscribeInfo{to, subject, headers["List-Unsubscribe"], headers.Get("Message-ID")}, nil
+	return value
 }
