@@ -1,9 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/juju/loggo"
 	"os"
@@ -12,13 +13,14 @@ import (
 
 type (
 	ConnectionSecurity byte
+	Base64Password     string
 
 	ConnectionConfig struct {
 		Host     string             `json:"host"`
 		Port     uint               `json:"port"`
 		Security ConnectionSecurity `json:"security"`
 		Login    string             `json:"login"`
-		Password string             `json:"password"`
+		Password Base64Password     `json:"password"`
 	}
 
 	IMAPConfig struct {
@@ -114,13 +116,25 @@ func (c ConnectionConfig) Addr() string {
 func (c ConnectionConfig) Connect(dialer PlainTextDialer, tlsDialer TLSDialer) (interface{}, error) {
 	conn, err := c.Security.Connect(c.Addr(), dialer, tlsDialer)
 	if err == nil && c.Login != "" {
-		err = conn.(Loginer).Login(c.Login, c.Password)
+		err = conn.(Loginer).Login(c.Login, c.Password.String())
 	}
 	return conn, err
 }
 
 func (c IMAPConfig) String() string {
 	return fmt.Sprintf("{%s}%s", c.ConnectionConfig, c.Mailbox)
+}
+
+func (p *Base64Password) UnmarshalText(text []byte) error {
+	clearPassword, err := base64.StdEncoding.DecodeString(string(text))
+	if err == nil {
+		*p = Base64Password(clearPassword)
+	}
+	return err
+}
+
+func (p Base64Password) String() string {
+	return string(p)
 }
 
 func LoadConfig(path string) (Config, error) {
