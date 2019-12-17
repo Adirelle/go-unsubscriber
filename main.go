@@ -1,10 +1,13 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"github.com/juju/loggo"
 	"github.com/juju/loggo/loggocolor"
+	"net/http"
 	"os"
+	"time"
 )
 
 func main() {
@@ -43,17 +46,21 @@ func main() {
 	reader, err := NewMailReader(config.IMAP)
 	defer func() { _ = reader.Close() }()
 
-	unsubscriber := NewUniqueUnsubscriber(BySchemeUnsubscriber(map[string]Unsubscriber{
-		"http":   MakeLoggerUnsubscriber("http"),
-		"https":  MakeLoggerUnsubscriber("https"),
-		"mailto": MakeLoggerUnsubscriber("mailto"),
-	}))
+	webUnsubscriber := &WebUnsubscriber{loggo.GetLogger("unsubscriber.web"), &http.Client{Timeout: 10 * time.Second}}
 
+	concurrentUnsubscriber := NewConcurrentUnsubscriber(
+		BySchemeUnsubscriber(map[string]Unsubscriber{
+			"http":  webUnsubscriber,
+			"https": webUnsubscriber,
+		}),
+		5,
+	)
+	defer func() { _ = concurrentUnsubscriber.Close() }()
+
+	unsubscriber := NewUniqueUnsubscriber(concurrentUnsubscriber)
 	for info := range reader.C {
-		if err := unsubscriber.Unsubscribe(info); err != nil {
+		if err := unsubscriber.Unsubscribe(info); err != nil && !errors.Is(err, ErrDuplicate) {
 			logger.Infof("could not process link: %q", err)
 		}
 	}
 }
-
-
