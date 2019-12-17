@@ -48,20 +48,16 @@ const (
 	SSL       ConnectionSecurity = 2
 )
 
-func (s *ConnectionSecurity) UnmarshalJSON(data []byte) error {
-	var str string
-	if err := json.Unmarshal(data, &str); err != nil {
-		return err
-	}
-	switch str {
-	case "plaintext":
+func (s *ConnectionSecurity) UnmarshalText(text []byte) error {
+	switch {
+	case bytes.EqualFold(text, []byte("plaintext")):
 		*s = PlainText
-	case "tls":
+	case bytes.EqualFold(text, []byte("tls")):
 		*s = StartTLS
-	case "ssl":
+	case bytes.EqualFold(text, []byte("ssl")):
 		*s = SSL
 	default:
-		return errors.New("unknown connection security: " + str)
+		return fmt.Errorf("unknown connection security: %q", text)
 	}
 	return nil
 }
