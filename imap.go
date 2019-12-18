@@ -108,7 +108,7 @@ func (r *MailReader) start() error {
 func (r *MailReader) searchMessages() (*imap.SeqSet, error) {
 
 	criteria := imap.NewSearchCriteria()
-	criteria.SeqNum, _ = imap.ParseSeqSet("1:5")
+	criteria.SeqNum, _ = imap.ParseSeqSet("1:20")
 	criteria.Header.Set("List-Unsubscribe", "")
 	criteria.WithoutFlags = []string{imap.DeletedFlag}
 

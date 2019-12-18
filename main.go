@@ -44,9 +44,23 @@ func main() {
 	defer logger.Infof("bye bye")
 
 	reader, err := NewMailReader(config.IMAP)
+	if err != nil {
+		logger.Criticalf("could not initialise the IMAP reader: %w", err)
+		os.Exit(1)
+	}
 	defer func() { _ = reader.Close() }()
 
-	webUnsubscriber := &WebUnsubscriber{loggo.GetLogger("unsubscriber.web"), &http.Client{Timeout: 10 * time.Second}}
+	netChecker, err := NewNonLocalAddressChecker()
+	if err != nil {
+		logger.Criticalf("could not initialise the host checker: %w", err)
+		os.Exit(1)
+	}
+
+	webUnsubscriber := &WebUnsubscriber{
+		loggo.GetLogger("unsubscriber.web"),
+		&http.Client{Timeout: 10 * time.Second},
+		netChecker,
+	}
 
 	concurrentUnsubscriber := NewConcurrentUnsubscriber(
 		BySchemeUnsubscriber(map[string]Unsubscriber{
