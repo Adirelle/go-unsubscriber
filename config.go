@@ -1,28 +1,13 @@
 package main
 
 import (
-	"bytes"
-	"crypto/tls"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/juju/loggo"
 	"os"
-	"strings"
 )
 
 type (
-	ConnectionSecurity byte
-	Base64Password     string
-
-	ConnectionConfig struct {
-		Host     string             `json:"host"`
-		Port     uint               `json:"port"`
-		Security ConnectionSecurity `json:"security"`
-		Login    string             `json:"login"`
-		Password Base64Password     `json:"password"`
-	}
-
 	IMAPConfig struct {
 		ConnectionConfig
 		Mailbox string `json:"mailbox"`
@@ -33,117 +18,19 @@ type (
 		SMTP ConnectionConfig `json:"smtp"`
 		Logs string           `json:"logs"`
 	}
-
-	PlainTextDialer func(string) (interface{}, error)
-	TLSDialer       func(string, *tls.Config) (interface{}, error)
-	TLSStarter      interface {
-		StartTLS(*tls.Config) error
-	}
-	Loginer interface {
-		Login(string, string) error
-	}
 )
-
-const (
-	PlainText ConnectionSecurity = 0
-	StartTLS  ConnectionSecurity = 1
-	SSL       ConnectionSecurity = 2
-)
-
-func (s *ConnectionSecurity) UnmarshalText(text []byte) error {
-	switch {
-	case bytes.EqualFold(text, []byte("plaintext")):
-		*s = PlainText
-	case bytes.EqualFold(text, []byte("tls")):
-		*s = StartTLS
-	case bytes.EqualFold(text, []byte("ssl")):
-		*s = SSL
-	default:
-		return fmt.Errorf("unknown connection security: %q", text)
-	}
-	return nil
-}
-
-func (s ConnectionSecurity) UseSecurePort() bool {
-	return s == SSL
-}
-
-func (s ConnectionSecurity) String() string {
-	switch s {
-	case PlainText:
-		return "plaintext"
-	case StartTLS:
-		return "tls"
-	case SSL:
-		return "ssl"
-	}
-	panic(fmt.Sprintf("unknown connection security: %d", s))
-}
-
-func (s ConnectionSecurity) Connect(addr string, dialer PlainTextDialer, tlsDialer TLSDialer) (interface{}, error) {
-	switch s {
-	case PlainText:
-		return dialer(addr)
-	case StartTLS:
-		conn, err := dialer(addr)
-		if err != nil {
-			return nil, err
-		}
-		return conn, conn.(TLSStarter).StartTLS(nil)
-	case SSL:
-		return tlsDialer(addr, nil)
-	}
-	panic(fmt.Sprintf("unknown connection security: %d", s))
-}
-
-func (c ConnectionConfig) String() string {
-	b := &strings.Builder{}
-	if c.Login != "" {
-		_, _ = b.WriteString(c.Login)
-		if c.Password != "" {
-			_, _ = b.WriteString(":xxx")
-		}
-		_, _ = b.WriteString("@")
-	}
-	_, _ = fmt.Fprintf(b, "%s:%d/%s", c.Host, c.Port, c.Security)
-	return b.String()
-}
-
-func (c ConnectionConfig) Addr() string {
-	return fmt.Sprintf("%s:%d", c.Host, c.Port)
-}
-
-func (c ConnectionConfig) Connect(dialer PlainTextDialer, tlsDialer TLSDialer) (interface{}, error) {
-	conn, err := c.Security.Connect(c.Addr(), dialer, tlsDialer)
-	if err == nil && c.Login != "" {
-		err = conn.(Loginer).Login(c.Login, c.Password.String())
-	}
-	return conn, err
-}
 
 func (c IMAPConfig) String() string {
 	return fmt.Sprintf("{%s}%s", c.ConnectionConfig, c.Mailbox)
-}
-
-func (p *Base64Password) UnmarshalText(text []byte) error {
-	clearPassword, err := base64.StdEncoding.DecodeString(string(text))
-	if err == nil {
-		*p = Base64Password(clearPassword)
-	}
-	return err
-}
-
-func (p Base64Password) String() string {
-	return string(p)
 }
 
 func LoadConfig(path string) (Config, error) {
 	var conf Config
 
 	if reader, err := os.Open(path); err == nil {
+		defer func() { _ = reader.Close() }()
 		loggo.GetLogger("config").Infof("reading configuration from %s", path)
 		err := json.NewDecoder(reader).Decode(&conf)
-		_ = reader.Close()
 		if err != nil {
 			return conf, err
 		}

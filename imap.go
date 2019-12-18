@@ -2,12 +2,12 @@ package main
 
 import (
 	"bufio"
-	"crypto/tls"
 	"fmt"
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 	"github.com/juju/loggo"
 	"mime"
+	"net"
 	"net/mail"
 	"net/textproto"
 	"net/url"
@@ -74,11 +74,8 @@ func (r *MailReader) Close() error {
 
 func (r *MailReader) connect(config IMAPConfig) error {
 	if conn, err := config.Connect(
-		func(addr string) (interface{}, error) {
-			return client.Dial(addr)
-		},
-		func(addr string, c *tls.Config) (interface{}, error) {
-			return client.DialTLS(addr, c)
+		func(conn net.Conn) (interface{}, error) {
+			return client.New(&ConnTap{conn, r.Logger.Child("wire")})
 		},
 	); err == nil {
 		r.client = conn.(*client.Client)
